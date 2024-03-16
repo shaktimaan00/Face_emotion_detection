@@ -1,62 +1,92 @@
-// FaceDetectionComponent.js
 import React, { useRef, useEffect } from 'react';
+import './style.css'; // Import the CSS file
 import * as faceapi from 'face-api.js';
 
 const FaceDetectionComponent = () => {
-  const videoRef = useRef();
+  const videoRef = useRef(null);
 
   useEffect(() => {
     const loadModels = async () => {
-      await faceapi.nets.tinyFaceDetector.loadFromUri('/models');
-      await faceapi.nets.faceLandmark68Net.loadFromUri('/models');
-      await faceapi.nets.faceExpressionNet.loadFromUri('/models');
-      await faceapi.nets.ageGenderNet.loadFromUri('/models');
+      await Promise.all([
+        faceapi.nets.tinyFaceDetector.loadFromUri('/models'),
+        faceapi.nets.faceLandmark68Net.loadFromUri('/models'),
+        faceapi.nets.faceRecognitionNet.loadFromUri('/models'),
+        faceapi.nets.faceExpressionNet.loadFromUri('/models'),
+        faceapi.nets.ageGenderNet.loadFromUri('/models')
+      ]);
+      startWebCam();
     };
 
-    const startVideo = () => {
-      navigator.mediaDevices.getUserMedia({ video: {} })
-        .then(stream => {
+    const startWebCam = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        if (videoRef.current) {
           videoRef.current.srcObject = stream;
-        })
-        .catch(err => console.error('Error accessing the webcam:', err));
-    };
-
-    const detectFaces = async () => {
-      const video = videoRef.current;
-      const canvas = faceapi.createCanvasFromMedia(video);
-      document.body.append(canvas);
-      const displaySize = { width: video.width, height: video.height };
-      faceapi.matchDimensions(canvas, displaySize);
-
-      setInterval(async () => {
-        const detections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
-          .withFaceLandmarks()
-          .withFaceExpressions()
-          .withAgeAndGender();
-
-        const resizedDetections = faceapi.resizeResults(detections, displaySize);
-        canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
-        faceapi.draw.drawDetections(canvas, resizedDetections);
-        faceapi.draw.drawFaceLandmarks(canvas, resizedDetections);
-        faceapi.draw.drawFaceExpressions(canvas, resizedDetections);
-
-        resizedDetections.forEach(result => {
-          const { age, gender, genderProbability } = result;
-          console.log('Age:', age);
-          console.log('Gender:', gender, 'Probability:', genderProbability);
-        });
-      }, 100);
+        }
+      } catch (error) {
+        console.error('Error accessing webcam:', error);
+      }
     };
 
     loadModels();
-    startVideo();
-    detectFaces();
+
+    return () => {
+      // Clean up code if necessary
+    };
+  }, []);
+
+  useEffect(() => {
+    const setupFaceDetection = async () => {
+      if (!videoRef.current) return;
+
+      // Wait for the video to load metadata (including dimensions)
+      await new Promise(resolve => {
+        videoRef.current.onloadedmetadata = resolve;
+      });
+
+      const canvas = faceapi.createCanvasFromMedia(videoRef.current);
+      document.body.append(canvas);
+
+      faceapi.matchDimensions(canvas, { height: videoRef.current.videoHeight, width: videoRef.current.videoWidth });
+
+      const intervalId = setInterval(async () => {
+        if (!videoRef.current.paused && !videoRef.current.ended) {
+          const detections = await faceapi.detectAllFaces(videoRef.current, new faceapi.TinyFaceDetectorOptions())
+            .withFaceLandmarks()
+            .withFaceExpressions()
+            .withAgeAndGender();
+
+          canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+          const resizedDetections = faceapi.resizeResults(detections, {
+            height: videoRef.current.videoHeight,
+            width: videoRef.current.videoWidth
+          });
+
+          faceapi.draw.drawDetections(canvas, resizedDetections);
+          faceapi.draw.drawFaceLandmarks(canvas, resizedDetections);
+          faceapi.draw.drawFaceExpressions(canvas, resizedDetections);
+
+          resizedDetections.forEach(detection => {
+            const box = detection.detection.box;
+            const drawBox = new faceapi.draw.DrawBox(box, {
+              label: `${Math.round(detection.age)} year old ${detection.gender}`
+            });
+            drawBox.draw(canvas);
+          });
+        }
+      }, 100);
+
+      return () => {
+        clearInterval(intervalId);
+        if (canvas) canvas.remove();
+      };
+    };
+
+    setupFaceDetection();
   }, []);
 
   return (
-    <div>
-      <video ref={videoRef} autoPlay muted />
-    </div>
+    <video id="video" ref={videoRef} width="640" height="480" autoPlay muted></video>
   );
 };
 
